@@ -41,7 +41,7 @@ jobs:
 
       - name: Extract Android source archive
         run: |
-          unzip -q Modiriat_Zendegi_2_0_Android_v0_20_0_source.zip -d extracted
+          unzip -q 'Modiriat_Zendegi_2_0_Android_v0_20_0_source(3).zip' -d extracted
           test -f extracted/DaftarTalabBedehi/settings.gradle.kts
           test -f extracted/DaftarTalabBedehi/app/build.gradle.kts
 
