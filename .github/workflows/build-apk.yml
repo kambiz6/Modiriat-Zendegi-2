@@ -1,0 +1,49 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "MZ_02325_Branch33_Stage6_Source.zip"
+      - ".github/workflows/build-apk.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: دریافت فایل‌های مخزن
+        uses: actions/checkout@v4
+
+      - name: نصب جاوا 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: نصب ابزارهای اندروید
+        uses: android-actions/setup-android@v3
+
+      - name: نصب Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: استخراج سورس جدید
+        run: |
+          unzip -q MZ_02325_Branch33_Stage6_Source.zip -d source
+          SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
+          test -n "$SETTINGS_FILE"
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: ساخت APK
+        run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
+
+      - name: ذخیره APK ساخته‌شده
+        uses: actions/upload-artifact@v4
+        with:
+          name: Modiriat-Zendegi-0.23.25-APK
+          path: source/**/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
