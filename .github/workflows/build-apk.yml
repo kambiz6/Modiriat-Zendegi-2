@@ -39,7 +39,10 @@ jobs:
         run: |
           unzip -q MZ_02325_Branch33_Stage6_Source.zip -d source
           test -f source/Modiriat_Zendegi_2_0_v0_23_24/settings.gradle.kts
-
+      - name: Align Java and Kotlin JVM targets
+        working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
+        run: |
+          sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' app/build.gradle.kts
       - name: Build debug APK
         working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
         run: gradle assembleDebug --stacktrace
