@@ -1,3 +1,4 @@
+
 name: Build Android APK
 
 on:
@@ -70,15 +71,21 @@ jobs:
         run: |
           grep -n -A 4 'compileOptions' app/build.gradle.kts
 
+      - name: Show Kotlin source around errors
+        run: |
+          FILE="$(find source -name MainActivity.kt -print -quit)"
+          test -n "$FILE"
+          echo "Source file: $FILE"
+          nl -ba "$FILE" | sed -n '1120,1185p'
+
       - name: Build debug APK
         working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
         run: gradle assembleDebug --stacktrace
-      - name: Show Kotlin source around errors
-        run: |
-          unzip -p MZ_02325_Branch33_Stage6_Source.zip '*/app/src/main/java/ir/kambiz/daftar/MainActivity.kt' | nl -ba | sed -n '1120,1185p'
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Modiriat-Zendegi-2-debug-apk
           path: source/Modiriat_Zendegi_2_0_v0_23_24/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
