@@ -1,4 +1,3 @@
-
 name: Build Android APK
 
 on:
@@ -42,15 +41,15 @@ jobs:
           unzip -q MZ_02325_Branch33_Stage6_Source.zip -d source
           test -f source/Modiriat_Zendegi_2_0_v0_23_24/settings.gradle.kts
 
-      - name: Inspect JVM target settings
+      - name: Inspect all Gradle build files
         working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
         run: |
+          echo "=== Gradle files in project ==="
+          find . -type f \( -name '*.gradle' -o -name '*.gradle.kts' \) -print
+          echo "=== JVM-related settings in every Gradle file ==="
+          find . -type f \( -name '*.gradle' -o -name '*.gradle.kts' \) -exec grep -n -E -C 4 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17|kotlinOptions|compilerOptions' {} + || true
           echo "=== app/build.gradle.kts ==="
-          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' app/build.gradle.kts || true
-          echo "=== root build.gradle.kts ==="
-          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' build.gradle.kts || true
-          echo "=== all Gradle Kotlin files ==="
-          grep -R -n -E 'VERSION_1_8|VERSION_17|sourceCompatibility|targetCompatibility|jvmTarget' --include='*.gradle.kts' .
+          sed -n '1,240p' app/build.gradle.kts
 
       - name: Build debug APK
         working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
@@ -62,4 +61,3 @@ jobs:
           name: Modiriat-Zendegi-2-debug-apk
           path: source/Modiriat_Zendegi_2_0_v0_23_24/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          
