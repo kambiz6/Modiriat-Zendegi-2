@@ -53,3 +53,12 @@ jobs:
           name: Modiriat-Zendegi-2-debug-apk
           path: source/Modiriat_Zendegi_2_0_v0_23_24/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+      - name: Inspect JVM target settings
+        working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
+        run: |
+          echo "=== app/build.gradle.kts ==="
+          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' app/build.gradle.kts || true
+          echo "=== root build.gradle.kts ==="
+          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' build.gradle.kts || true
+          echo "=== all Gradle Kotlin files ==="
+          grep -R -n -E 'VERSION_1_8|VERSION_17|sourceCompatibility|targetCompatibility|jvmTarget' --include='*.gradle.kts' .
