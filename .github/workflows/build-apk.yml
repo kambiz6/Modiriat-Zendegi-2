@@ -70,31 +70,32 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path("source/Modiriat_Zendegi_2_0_v0_23_24/app/src/main/java/ir/kambiz/daftar/MainActivity.kt")
           s = p.read_text()
 
-          old = '''        val todaysTasks=readHomeTasks().filter{it.optString("day_key")==todayKey}
-          if(todaysTasks.isEmpty()) tasks.addView(text("برای امروز کاری ثبت نشده است.",(14f*large)))'''
+          pattern = r'(?m)^([ \t]*)val todaysTasks=readHomeTasks\(\)\.filter\{it\.optString\("day_key"\)==todayKey\}[ \t]*$'
 
-          new = '''        val allTasks=readHomeTasks()
-          val todaysTasks=mutableListOf<org.json.JSONObject>()
-          for(taskIndex in 0 until allTasks.length()){
-              val task=allTasks.optJSONObject(taskIndex) ?: continue
-              if(task.optString("day_key")==todayKey) todaysTasks.add(task)
-          }
-          if(todaysTasks.isEmpty()) tasks.addView(text("برای امروز کاری ثبت نشده است.",(14f*large)))'''
+          replacement = (
+              r'\1val allTasks=readHomeTasks()' + '\n' +
+              r'\1val todaysTasks=mutableListOf<org.json.JSONObject>()' + '\n' +
+              r'\1for(taskIndex in 0 until allTasks.length()){' + '\n' +
+              r'\1    val task=allTasks.optJSONObject(taskIndex) ?: continue' + '\n' +
+              r'\1    if(task.optString("day_key")==todayKey) todaysTasks.add(task)' + '\n' +
+              r'\1}'
+          )
 
-          if old not in s:
-              raise SystemExit("Today's tasks code was not found; source was not changed")
+          s, count = re.subn(pattern, replacement, s, count=1)
 
-          s = s.replace(old, new, 1)
+          if count != 1:
+              raise SystemExit("Today's tasks line was not found exactly once")
 
           old_progress = 'max=100;progress=percent.coerceAtMost(100)'
           new_progress = 'max=100;this.progress=percent.coerceAtMost(100)'
 
           if old_progress not in s:
-              raise SystemExit("ProgressBar code was not found; source was not changed")
+              raise SystemExit("ProgressBar code was not found")
 
           s = s.replace(old_progress, new_progress, 1)
 
@@ -123,4 +124,3 @@ jobs:
           name: Modiriat-Zendegi-2-debug-apk
           path: source/Modiriat_Zendegi_2_0_v0_23_24/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          
