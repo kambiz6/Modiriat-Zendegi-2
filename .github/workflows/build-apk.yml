@@ -73,7 +73,9 @@ jobs:
       - name: Build debug APK
         working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
         run: gradle assembleDebug --stacktrace
-
+      - name: Show Kotlin source around errors
+        run: |
+          unzip -p MZ_02325_Branch33_Stage6_Source.zip '*/app/src/main/java/ir/kambiz/daftar/MainActivity.kt' | nl -ba | sed -n '1120,1185p'
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
