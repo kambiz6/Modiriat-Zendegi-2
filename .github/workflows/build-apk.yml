@@ -1,3 +1,4 @@
+
 name: Build Android APK
 
 on:
@@ -15,6 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout source archive
         uses: actions/checkout@v4
@@ -39,10 +41,17 @@ jobs:
         run: |
           unzip -q MZ_02325_Branch33_Stage6_Source.zip -d source
           test -f source/Modiriat_Zendegi_2_0_v0_23_24/settings.gradle.kts
-      - name: Align Java and Kotlin JVM targets
+
+      - name: Inspect JVM target settings
         working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
         run: |
-          sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' app/build.gradle.kts
+          echo "=== app/build.gradle.kts ==="
+          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' app/build.gradle.kts || true
+          echo "=== root build.gradle.kts ==="
+          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' build.gradle.kts || true
+          echo "=== all Gradle Kotlin files ==="
+          grep -R -n -E 'VERSION_1_8|VERSION_17|sourceCompatibility|targetCompatibility|jvmTarget' --include='*.gradle.kts' .
+
       - name: Build debug APK
         working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
         run: gradle assembleDebug --stacktrace
@@ -53,12 +62,4 @@ jobs:
           name: Modiriat-Zendegi-2-debug-apk
           path: source/Modiriat_Zendegi_2_0_v0_23_24/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-      - name: Inspect JVM target settings
-        working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
-        run: |
-          echo "=== app/build.gradle.kts ==="
-          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' app/build.gradle.kts || true
-          echo "=== root build.gradle.kts ==="
-          grep -n -E -C 3 'compileOptions|sourceCompatibility|targetCompatibility|jvmTarget|VERSION_1_8|VERSION_17' build.gradle.kts || true
-          echo "=== all Gradle Kotlin files ==="
-          grep -R -n -E 'VERSION_1_8|VERSION_17|sourceCompatibility|targetCompatibility|jvmTarget' --include='*.gradle.kts' .
+          
