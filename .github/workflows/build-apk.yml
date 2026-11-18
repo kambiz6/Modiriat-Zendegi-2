@@ -24,6 +24,8 @@ jobs:
 
       - name: نصب ابزارهای اندروید
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: نصب Gradle
         uses: gradle/actions/setup-gradle@v4
