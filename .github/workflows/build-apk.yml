@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "MZ_SOURCE_v7.zip"
+      - "MZ_SOURCE_v7_FIXED.zip"
       - ".github/workflows/build-apk.yml"
 
 jobs:
@@ -31,9 +32,9 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      - name: استخراج سورس V7
+      - name: استخراج سورس اصلاح‌شده V7
         run: |
-          unzip -q MZ_SOURCE_v7.zip -d source
+          unzip -q MZ_SOURCE_v7_FIXED.zip -d source
 
           SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
 
