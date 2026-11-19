@@ -45,18 +45,22 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: بررسی تنظیمات نسخه Java و Kotlin
+      - name: نمایش تنظیمات کامل Gradle
         run: |
           echo "PROJECT_DIR=$PROJECT_DIR"
 
-          find "$PROJECT_DIR" -type f \( \
-            -name "build.gradle" -o \
-            -name "build.gradle.kts" -o \
-            -name "gradle.properties" \
-          \) -not -path "*/build/*" -print0 |
-          while IFS= read -r -d '' file; do
-            echo "===== $file ====="
-            grep -nEi "sourceCompatibility|targetCompatibility|jvmTarget|jvmToolchain|VERSION_1_8|VERSION_17|kotlinOptions|compilerOptions" "$file" || true
+          for file in \
+            "$PROJECT_DIR/build.gradle.kts" \
+            "$PROJECT_DIR/build.gradle" \
+            "$PROJECT_DIR/app/build.gradle.kts" \
+            "$PROJECT_DIR/app/build.gradle" \
+            "$PROJECT_DIR/gradle.properties"
+          do
+            if [ -f "$file" ]; then
+              echo "========== $file =========="
+              cat "$file"
+              echo ""
+            fi
           done
 
       - name: ساخت APK
@@ -68,4 +72,3 @@ jobs:
           name: Modiriat-Zendegi-0.23.27-APK
           path: source/**/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          
