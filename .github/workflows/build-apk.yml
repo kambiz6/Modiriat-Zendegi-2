@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "MZ_SOURCE_v24.zip"
+      - "MZ_SOURCE_v24_FIXED.zip"
       - ".github/workflows/build-apk.yml"
 
 jobs:
@@ -31,9 +31,9 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      - name: استخراج سورس V24
+      - name: استخراج سورس اصلاح‌شده V24
         run: |
-          unzip -q MZ_SOURCE_v24.zip -d source
+          unzip -q MZ_SOURCE_v24_FIXED.zip -d source
 
           SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
 
@@ -69,7 +69,7 @@ jobs:
       - name: ذخیره APK ساخته‌شده
         uses: actions/upload-artifact@v4
         with:
-          name: Modiriat-Zendegi-0.23.45-APK
+          name: Modiriat-Zendegi-V24-FIXED-APK
           path: source/**/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           
