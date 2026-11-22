@@ -1,0 +1,128 @@
+name: Build Android APK v0.23.25
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'MZ_02325_Branch33_Stage6_Source.zip'
+      - '.github/workflows/build-apk-v0.23.25.yml'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Extract Android project
+        run: |
+          unzip -q MZ_02325_Branch33_Stage6_Source.zip -d source
+          test -f source/Modiriat_Zendegi_2_0_v0_23_24/settings.gradle.kts
+
+      - name: Fix Java target to 17
+        working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("app/build.gradle.kts")
+          s = p.read_text()
+
+          needle = '        versionName = "0.23.25"\n    }\n}'
+          replacement = '''        versionName = "0.23.25"
+          }
+          compileOptions {
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+          }
+          }'''
+
+          if needle not in s:
+              raise SystemExit("Expected Gradle configuration was not found")
+
+          p.write_text(s.replace(needle, replacement, 1))
+          PY
+
+      - name: Fix Kotlin compile errors
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("source/Modiriat_Zendegi_2_0_v0_23_24/app/src/main/java/ir/kambiz/daftar/MainActivity.kt")
+          s = p.read_text()
+
+          pattern = r'(?m)^([ \t]*)val todaysTasks=readHomeTasks\(\)\.filter\{it\.optString\("day_key"\)==todayKey\}[ \t]*$'
+
+          replacement = (
+              r'\1val allTasks=readHomeTasks()' + '\n' +
+              r'\1val todaysTasks=mutableListOf<org.json.JSONObject>()' + '\n' +
+              r'\1for(taskIndex in 0 until allTasks.length()){' + '\n' +
+              r'\1    val task=allTasks.optJSONObject(taskIndex) ?: continue' + '\n' +
+              r'\1    if(task.optString("day_key")==todayKey) todaysTasks.add(task)' + '\n' +
+              r'\1}'
+          )
+
+          s, count = re.subn(pattern, replacement, s, count=1)
+
+          if count != 1:
+              raise SystemExit("Today's tasks line was not found exactly once")
+
+          old_progress = 'max=100;progress=percent.coerceAtMost(100)'
+          new_progress = 'max=100;this.progress=percent.coerceAtMost(100)'
+
+          if old_progress not in s:
+              raise SystemExit("ProgressBar code was not found")
+
+          s = s.replace(old_progress, new_progress, 1)
+
+          p.write_text(s)
+          print("Kotlin fixes applied successfully")
+          PY
+
+      - name: Verify JVM target
+        working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
+        run: |
+          grep -n -A 4 'compileOptions' app/build.gradle.kts
+
+      - name: Show corrected Kotlin source
+        run: |
+          FILE="$(find source -name MainActivity.kt -print -quit)"
+          test -n "$FILE"
+          nl -ba "$FILE" | sed -n '1134,1180p'
+
+      - name: Build debug APK
+        working-directory: source/Modiriat_Zendegi_2_0_v0_23_24
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Modiriat-Zendegi-0.23.25-debug-apk
+          path: source/Modiriat_Zendegi_2_0_v0_23_24/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
