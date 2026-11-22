@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "MZ_02325_Branch33_Stage6_Source.zip"
+      - "MZ_SOURCE_v24_FIXED.zip"
       - ".github/workflows/build-apk.yml"
 
 jobs:
@@ -23,20 +23,45 @@ jobs:
 
       - name: نصب ابزارهای اندروید
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: نصب Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
-      - name: استخراج سورس جدید
+      - name: استخراج سورس اصلاح‌شده V24
         run: |
-          unzip -q MZ_02325_Branch33_Stage6_Source.zip -d source
+          unzip -q MZ_SOURCE_v24_FIXED.zip -d source
+
           SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
+
           test -n "$SETTINGS_FILE"
+
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
           test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: نمایش تنظیمات کامل Gradle
+        run: |
+          echo "PROJECT_DIR=$PROJECT_DIR"
+
+          for file in \
+            "$PROJECT_DIR/build.gradle.kts" \
+            "$PROJECT_DIR/build.gradle" \
+            "$PROJECT_DIR/app/build.gradle.kts" \
+            "$PROJECT_DIR/app/build.gradle" \
+            "$PROJECT_DIR/gradle.properties"
+          do
+            if [ -f "$file" ]; then
+              echo "========== $file =========="
+              cat "$file"
+              echo ""
+            fi
+          done
 
       - name: ساخت APK
         run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
@@ -44,6 +69,7 @@ jobs:
       - name: ذخیره APK ساخته‌شده
         uses: actions/upload-artifact@v4
         with:
-          name: Modiriat-Zendegi-0.23.25-APK
+          name: Modiriat-Zendegi-V24-FIXED-APK
           path: source/**/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
