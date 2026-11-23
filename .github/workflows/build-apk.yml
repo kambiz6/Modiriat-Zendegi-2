@@ -41,7 +41,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null
+
+          printf 'y\n%.0s' {1..100} > licenses.txt
+          sdkmanager --licenses < licenses.txt
+          rm -f licenses.txt
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -66,6 +70,7 @@ jobs:
           unzip -q MZ_SOURCE-28_NO-APK.zip -d source
 
           SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
+
           test -n "$SETTINGS_FILE"
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
@@ -80,6 +85,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           echo "Source package: SOURCE-28"
           echo "Branch: ${GITHUB_REF_NAME}"
           echo "Commit: ${GITHUB_SHA}"
@@ -94,6 +100,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit | grep -q .
 
       - name: ذخیره APK ساخته‌شده
