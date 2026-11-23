@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: دریافت فایل‌های مخزن
@@ -58,6 +58,79 @@ jobs:
         with:
           gradle-version: "8.7"
 
+      - name: تنظیم آینه Maven Central با مسیر جایگزین
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "$RUNNER_TEMP/maven-central-mirror.gradle" <<'GRADLE'
+          def central = ~/^https:\/\/(repo\.maven\.apache\.org|repo1\.maven\.org)\/maven2\/?/
+          def mirror = 'https://maven-central.storage-download.googleapis.com/maven2/'
+          def fallback = 'mavenCentralBehindMirror'
+
+          def addFallback = { RepositoryHandler repositories ->
+              repositories.maven {
+                  name = fallback
+                  url = 'https://repo.maven.apache.org/maven2/'
+              }
+          }
+
+          def toMirror = { RepositoryHandler repositories ->
+              def hasFallback = false
+
+              repositories.all { repository ->
+                  if (repository.name == fallback) {
+                      return
+                  }
+
+                  if (repository instanceof MavenArtifactRepository) {
+                      def url = repository.url.toString()
+
+                      if (url =~ central) {
+                          repository.url = url.replaceFirst(central, mirror)
+
+                          if (!hasFallback) {
+                              hasFallback = true
+                              addFallback(repositories)
+                              return
+                          }
+                      }
+                  }
+
+                  def last = repositories.findByName(fallback)
+
+                  if (hasFallback && !repositories.last().is(last)) {
+                      repositories.remove(last)
+                      repositories.add(last)
+                  }
+              }
+          }
+
+          beforeSettings { settings ->
+              toMirror(settings.buildscript.repositories)
+              toMirror(settings.pluginManagement.repositories)
+              toMirror(settings.dependencyResolutionManagement.repositories)
+          }
+
+          settingsEvaluated { settings ->
+              if (settings.pluginManagement.repositories.isEmpty()) {
+                  settings.pluginManagement.repositories {
+                      maven { url = mirror }
+                      addFallback(delegate)
+                      gradlePluginPortal()
+                  }
+              }
+          }
+
+          allprojects { project ->
+              toMirror(project.buildscript.repositories)
+              toMirror(project.repositories)
+          }
+          GRADLE
+
+          test -s "$RUNNER_TEMP/maven-central-mirror.gradle"
+          echo "Maven Central mirror init script created."
+
       - name: بررسی و استخراج SOURCE-28
         shell: bash
         run: |
@@ -94,7 +167,16 @@ jobs:
           find "$PROJECT_DIR" -maxdepth 3 -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'gradle.properties' \) -print
 
       - name: ساخت APK آزمایشی
-        run: gradle --no-daemon --stacktrace -p "$PROJECT_DIR" assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --init-script "$RUNNER_TEMP/maven-central-mirror.gradle" \
+            -p "$PROJECT_DIR" \
+            assembleDebug
 
       - name: کنترل وجود APK
         shell: bash
