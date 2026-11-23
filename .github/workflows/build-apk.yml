@@ -1,15 +1,25 @@
-name: Build Android APK
+name: Build Android APK - SOURCE-28
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - build-new-apk
     paths:
-      - "MZ_SOURCE_v24_FIXED.zip"
+      - "MZ_SOURCE-28_NO-APK.zip"
       - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-28-android-build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: دریافت فایل‌های مخزن
@@ -24,52 +34,65 @@ jobs:
       - name: نصب ابزارهای اندروید
         uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools
+          packages: |
+            platform-tools
+            platforms;android-35
+            platforms;android-36
+            build-tools;35.0.0
+            build-tools;36.0.0
 
       - name: نصب Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
-      - name: استخراج سورس اصلاح‌شده V24
+      - name: بررسی و استخراج SOURCE-28
+        shell: bash
         run: |
-          unzip -q MZ_SOURCE_v24_FIXED.zip -d source
+          set -euo pipefail
+          test -s MZ_SOURCE-28_NO-APK.zip
+          unzip -tq MZ_SOURCE-28_NO-APK.zip
+          mkdir -p source
+          unzip -q MZ_SOURCE-28_NO-APK.zip -d source
 
           SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
-
           test -n "$SETTINGS_FILE"
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-
           test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
-
+          test -f "$PROJECT_DIR/gradle.properties"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Resolved Android project: $PROJECT_DIR"
 
-      - name: نمایش تنظیمات کامل Gradle
+      - name: ثبت مشخصات ساخت
+        shell: bash
         run: |
-          echo "PROJECT_DIR=$PROJECT_DIR"
+          echo "Source package: SOURCE-28"
+          echo "Branch: ${GITHUB_REF_NAME}"
+          echo "Commit: ${GITHUB_SHA}"
+          echo "Project directory: $PROJECT_DIR"
+          find "$PROJECT_DIR" -maxdepth 3 -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'gradle.properties' \) -print
 
-          for file in \
-            "$PROJECT_DIR/build.gradle.kts" \
-            "$PROJECT_DIR/build.gradle" \
-            "$PROJECT_DIR/app/build.gradle.kts" \
-            "$PROJECT_DIR/app/build.gradle" \
-            "$PROJECT_DIR/gradle.properties"
-          do
-            if [ -f "$file" ]; then
-              echo "========== $file =========="
-              cat "$file"
-              echo ""
-            fi
-          done
+      - name: ساخت APK آزمایشی
+        run: gradle --no-daemon --stacktrace -p "$PROJECT_DIR" assembleDebug
 
-      - name: ساخت APK
-        run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
+      - name: کنترل وجود APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit | grep -q .
 
       - name: ذخیره APK ساخته‌شده
         uses: actions/upload-artifact@v4
         with:
-          name: Modiriat-Zendegi-V24-FIXED-APK
-          path: source/**/app/build/outputs/apk/debug/*.apk
+          name: Modiriat-Zendegi-SOURCE-28-debug-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          
+          retention-days: 14
+
+
+
+
+
+
+
