@@ -1,3 +1,4 @@
+
 name: Build Android APK - SOURCE-28
 
 on:
@@ -32,7 +33,9 @@ jobs:
           java-version: "17"
 
       - name: نصب ابزارهای پایه اندروید
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: پذیرش مجوزها و نصب بسته‌های Android SDK
         shell: bash
@@ -55,8 +58,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           test -s MZ_SOURCE-28_NO-APK.zip
           unzip -tq MZ_SOURCE-28_NO-APK.zip
+
           mkdir -p source
           unzip -q MZ_SOURCE-28_NO-APK.zip -d source
 
@@ -64,18 +69,22 @@ jobs:
           test -n "$SETTINGS_FILE"
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
           test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
           test -f "$PROJECT_DIR/gradle.properties"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Resolved Android project: $PROJECT_DIR"
 
       - name: ثبت مشخصات ساخت
         shell: bash
         run: |
+          set -euo pipefail
           echo "Source package: SOURCE-28"
           echo "Branch: ${GITHUB_REF_NAME}"
           echo "Commit: ${GITHUB_SHA}"
           echo "Project directory: $PROJECT_DIR"
+
           find "$PROJECT_DIR" -maxdepth 3 -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'gradle.properties' \) -print
 
       - name: ساخت APK آزمایشی
@@ -94,10 +103,3 @@ jobs:
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
-
-
-
-
-
-
-
