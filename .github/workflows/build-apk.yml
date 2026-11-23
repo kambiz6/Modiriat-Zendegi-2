@@ -31,15 +31,20 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: نصب ابزارهای اندروید
+      - name: نصب ابزارهای پایه اندروید
         uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            platforms;android-36
-            build-tools;35.0.0
-            build-tools;36.0.0
+
+      - name: پذیرش مجوزها و نصب بسته‌های Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "build-tools;36.0.0"
 
       - name: نصب Gradle
         uses: gradle/actions/setup-gradle@v4
