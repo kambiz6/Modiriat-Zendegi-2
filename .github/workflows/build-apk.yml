@@ -1,5 +1,5 @@
 
-name: Build Android APK - SOURCE-28
+name: Build Android APK - SOURCE-28 FIXED
 
 on:
   workflow_dispatch:
@@ -7,14 +7,14 @@ on:
     branches:
       - build-new-apk
     paths:
-      - "MZ_SOURCE-28_NO-APK.zip"
+      - "MZ_SOURCE-28_FIXED.zip"
       - ".github/workflows/build-apk.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: source-28-android-build-${{ github.ref }}
+  group: source-28-fixed-android-build-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -131,16 +131,16 @@ jobs:
           test -s "$RUNNER_TEMP/maven-central-mirror.gradle"
           echo "Maven Central mirror init script created."
 
-      - name: بررسی و استخراج SOURCE-28
+      - name: بررسی و استخراج SOURCE-28 FIXED
         shell: bash
         run: |
           set -euo pipefail
 
-          test -s MZ_SOURCE-28_NO-APK.zip
-          unzip -tq MZ_SOURCE-28_NO-APK.zip
+          test -s MZ_SOURCE-28_FIXED.zip
+          unzip -tq MZ_SOURCE-28_FIXED.zip
 
           mkdir -p source
-          unzip -q MZ_SOURCE-28_NO-APK.zip -d source
+          unzip -q MZ_SOURCE-28_FIXED.zip -d source
 
           SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
 
@@ -159,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Source package: SOURCE-28"
+          echo "Source package: SOURCE-28 FIXED"
           echo "Branch: ${GITHUB_REF_NAME}"
           echo "Commit: ${GITHUB_SHA}"
           echo "Project directory: $PROJECT_DIR"
@@ -188,7 +188,8 @@ jobs:
       - name: ذخیره APK ساخته‌شده
         uses: actions/upload-artifact@v4
         with:
-          name: Modiriat-Zendegi-SOURCE-28-debug-APK
+          name: Modiriat-Zendegi-SOURCE-28-FIXED-debug-APK
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+          
