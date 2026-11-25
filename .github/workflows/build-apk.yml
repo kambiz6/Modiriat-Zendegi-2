@@ -1,5 +1,5 @@
 
-name: Build Android APK - SOURCE-28 FIXED
+name: Build Android APK - SOURCE-28 v1.0.0
 
 on:
   workflow_dispatch:
@@ -7,20 +7,20 @@ on:
     branches:
       - build-new-apk
     paths:
-      - "MZ_SOURCE-28_FIXED.zip"
+      - "MZ_SOURCE-28_v1.0.0.zip"
       - ".github/workflows/build-apk.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: source-28-fixed-android-build-${{ github.ref }}
+  group: source-28-v1-0-0-android-build-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-and-package:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
 
     steps:
       - name: دریافت فایل‌های مخزن
@@ -37,15 +37,13 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: پذیرش مجوزها و نصب بسته‌های Android SDK
+      - name: نصب بسته‌های Android SDK
         shell: bash
         run: |
           set -euo pipefail
-
           printf 'y\n%.0s' {1..100} > licenses.txt
           sdkmanager --licenses < licenses.txt
           rm -f licenses.txt
-
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -58,11 +56,10 @@ jobs:
         with:
           gradle-version: "8.7"
 
-      - name: تنظیم آینه Maven Central با مسیر جایگزین
+      - name: تنظیم آینه Maven Central
         shell: bash
         run: |
           set -euo pipefail
-
           cat > "$RUNNER_TEMP/maven-central-mirror.gradle" <<'GRADLE'
           def central = ~/^https:\/\/(repo\.maven\.apache\.org|repo1\.maven\.org)\/maven2\/?/
           def mirror = 'https://maven-central.storage-download.googleapis.com/maven2/'
@@ -77,31 +74,18 @@ jobs:
 
           def toMirror = { RepositoryHandler repositories ->
               def hasFallback = false
-
               repositories.all { repository ->
-                  if (repository.name == fallback) {
-                      return
-                  }
-
+                  if (repository.name == fallback) return
                   if (repository instanceof MavenArtifactRepository) {
                       def url = repository.url.toString()
-
                       if (url =~ central) {
                           repository.url = url.replaceFirst(central, mirror)
-
                           if (!hasFallback) {
                               hasFallback = true
                               addFallback(repositories)
                               return
                           }
                       }
-                  }
-
-                  def last = repositories.findByName(fallback)
-
-                  if (hasFallback && !repositories.last().is(last)) {
-                      repositories.remove(last)
-                      repositories.add(last)
                   }
               }
           }
@@ -129,67 +113,289 @@ jobs:
           GRADLE
 
           test -s "$RUNNER_TEMP/maven-central-mirror.gradle"
-          echo "Maven Central mirror init script created."
 
-      - name: بررسی و استخراج SOURCE-28 FIXED
+      - name: آماده‌سازی ساختار بسته نهایی ۱۱‌بخشی
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p package \
+            package/01_APK \
+            package/02_SOURCE_ARCHIVE \
+            package/03_EXTRACTED_SOURCE \
+            package/04_BUILD_ENVIRONMENT \
+            package/05_BUILD_LOGS \
+            package/06_TEST_REPORTS \
+            package/07_CHANGELOG \
+            package/08_BUILD_METADATA \
+            package/09_HASHES \
+            package/10_REBUILD_GUIDE \
+            package/11_OPTIONAL_ARTIFACTS \
+            source dist
+
+      - name: بررسی و استخراج سورس نسخه ۱.۰.۰
         shell: bash
         run: |
           set -euo pipefail
 
-          test -s MZ_SOURCE-28_FIXED.zip
-          unzip -tq MZ_SOURCE-28_FIXED.zip
+          SOURCE_ZIP="MZ_SOURCE-28_v1.0.0.zip"
+          test -s "$SOURCE_ZIP"
+          unzip -tq "$SOURCE_ZIP"
 
-          mkdir -p source
-          unzip -q MZ_SOURCE-28_FIXED.zip -d source
+          cp "$SOURCE_ZIP" package/02_SOURCE_ARCHIVE/
+          unzip -q "$SOURCE_ZIP" -d source
 
-          SETTINGS_FILE=$(find source -maxdepth 7 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
-
+          SETTINGS_FILE=$(find source -maxdepth 8 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
           test -n "$SETTINGS_FILE"
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-
           test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
           test -f "$PROJECT_DIR/gradle.properties"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Resolved Android project: $PROJECT_DIR"
+          echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
 
-      - name: ثبت مشخصات ساخت
+          cp -a "$PROJECT_DIR/." package/03_EXTRACTED_SOURCE/
+
+      - name: کنترل مشخصات نسخه و شناسه بسته
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Source package: SOURCE-28 FIXED"
-          echo "Branch: ${GITHUB_REF_NAME}"
-          echo "Commit: ${GITHUB_SHA}"
-          echo "Project directory: $PROJECT_DIR"
+          python3 - "$PROJECT_DIR" <<'PY'
+          import pathlib, re, sys
 
-          find "$PROJECT_DIR" -maxdepth 3 -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'gradle.properties' \) -print
+          root = pathlib.Path(sys.argv[1])
+          candidates = [
+              root / "app/build.gradle",
+              root / "app/build.gradle.kts"
+          ]
+          candidates += list(root.glob("**/gradle.properties"))
+
+          text = "\n".join(
+              p.read_text(errors="ignore")
+              for p in candidates if p.exists()
+          )
+
+          checks = {
+              "versionName 1.0.0": r'versionName\s*(?:=\s*)?["\']1\.0\.0["\']',
+              "versionCode 82": r'versionCode\s*(?:=\s*)?82\b',
+              "applicationId ir.kambiz.daftar": r'applicationId\s*(?:=\s*)?["\']ir\.kambiz\.daftar["\']',
+          }
+
+          failed = [
+              name for name, pattern in checks.items()
+              if not re.search(pattern, text)
+          ]
+
+          if failed:
+              print("FAILED source identity validation:")
+              print("\n".join(f"- {x}" for x in failed))
+              sys.exit(1)
+
+          print("PASS: versionName=1.0.0")
+          print("PASS: versionCode=82")
+          print("PASS: applicationId=ir.kambiz.daftar")
+          PY
+
+      - name: ثبت محیط ساخت
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "Build timestamp UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Runner: $RUNNER_OS"
+            echo "Architecture: $(uname -m)"
+            echo "Java:"
+            java -version 2>&1
+            echo "Gradle:"
+            gradle --version
+            echo "Android SDK:"
+            sdkmanager --list_installed 2>&1 | head -80 || true
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Branch: ${GITHUB_REF_NAME}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Workflow run: ${GITHUB_RUN_ID}"
+            echo "Run number: ${GITHUB_RUN_NUMBER}"
+            echo "Source archive: ${SOURCE_ZIP}"
+            echo "Project directory: ${PROJECT_DIR}"
+          } > package/04_BUILD_ENVIRONMENT/build-environment.txt
 
       - name: ساخت APK آزمایشی
         shell: bash
         run: |
           set -euo pipefail
+          set -o pipefail
 
           gradle \
             --no-daemon \
             --stacktrace \
             --init-script "$RUNNER_TEMP/maven-central-mirror.gradle" \
             -p "$PROJECT_DIR" \
-            assembleDebug
+            assembleDebug 2>&1 | tee package/05_BUILD_LOGS/gradle-build.log
 
-      - name: کنترل وجود APK
+      - name: کنترل مشخصات APK ساخته‌شده
         shell: bash
         run: |
           set -euo pipefail
 
-          find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit | grep -q .
+          APK=$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit)
+          test -n "$APK"
 
-      - name: ذخیره APK ساخته‌شده
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -x "$AAPT"
+
+          BADGING=$("$AAPT" dump badging "$APK")
+
+          printf '%s\n' "$BADGING" | grep -F "package: name='ir.kambiz.daftar' versionCode='82' versionName='1.0.0'"
+
+          printf '%s\n' "$BADGING" > package/08_BUILD_METADATA/apk-badging.txt
+
+          cp "$APK" package/01_APK/
+
+          echo "APK_FILE=$(basename "$APK")" >> "$GITHUB_ENV"
+
+          {
+            echo "Build result: SUCCESS"
+            echo "APK identity validation: PASSED"
+            echo "APK: $(basename "$APK")"
+            echo "applicationId: ir.kambiz.daftar"
+            echo "versionName: 1.0.0"
+            echo "versionCode: 82"
+            echo "APK source path: $APK"
+          } > package/08_BUILD_METADATA/build-report.txt
+
+      - name: ثبت وضعیت آزمون‌ها
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > package/06_TEST_REPORTS/test-status.txt <<'EOF'
+          Build validation: PASSED.
+          Source identity validation: PASSED.
+          APK identity validation: PASSED.
+          Automated unit/instrumentation tests: NOT RUN.
+          Physical Android device installation test: NOT RUN.
+          Runtime/functional acceptance test: NOT RUN.
+          Build type: DEBUG.
+          Private release signing key: NOT INCLUDED.
+          EOF
+
+      - name: ثبت وضعیت تغییرات نسخه
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > package/07_CHANGELOG/CHANGELOG_STATUS.txt <<'EOF'
+          No independently approved project changelog was supplied.
+          Feature changes are not invented by this workflow.
+          Release target: 1.0.0
+          versionCode: 82
+          applicationId: ir.kambiz.daftar
+          EOF
+
+      - name: تهیه راهنمای بازسازی
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > package/10_REBUILD_GUIDE/REBUILD_GUIDE.txt <<'EOF'
+          REBUILD GUIDE
+
+          1. Use the exact source archive in 02_SOURCE_ARCHIVE.
+          2. Extract the archive.
+          3. Locate settings.gradle or settings.gradle.kts.
+          4. Use JDK 17.
+          5. Use Android SDK platforms 35 and 36.
+          6. Use Android build-tools 35.0.0 and 36.0.0.
+          7. Use Gradle 8.7.
+          8. Run from the Android project directory:
+
+             gradle --no-daemon assembleDebug
+
+          9. Expected output:
+             app/build/outputs/apk/debug/*.apk
+
+          10. This is a debug build.
+          11. Device installation and runtime tests must be performed separately.
+          12. Do not treat this package as a release-signed APK.
+          EOF
+
+          cat > package/11_OPTIONAL_ARTIFACTS/CONTENTS_STATUS.txt <<'EOF'
+          No optional screenshots, profiler traces, or device diagnostics were generated.
+          No private keys, passwords, access tokens, or signing credentials are packaged.
+          EOF
+
+      - name: ثبت فراداده نسخه و ساخت
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > package/08_BUILD_METADATA/release-metadata.txt <<EOF
+          Release target: 1.0.0
+          versionCode: 82
+          applicationId: ir.kambiz.daftar
+          Display name target: مدیریت زندگی
+          Source archive: ${SOURCE_ZIP}
+          Repository: ${GITHUB_REPOSITORY}
+          Branch: ${GITHUB_REF_NAME}
+          Commit: ${GITHUB_SHA}
+          Workflow run ID: ${GITHUB_RUN_ID}
+          Workflow run number: ${GITHUB_RUN_NUMBER}
+          APK filename: ${APK_FILE}
+          Build type: debug
+          EOF
+
+      - name: تهیه فهرست هش فایل‌ها
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          (
+            cd package
+            find . -type f ! -path './09_HASHES/SHA256SUMS.txt' -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > package/09_HASHES/SHA256SUMS.txt
+
+      - name: ساخت ZIP نهایی یکپارچه ۱۱‌بخشی
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_NAME="Modiriat-Zendegi-v1.0.0-FULL-PACKAGE.zip"
+
+          zip -qr "dist/$ZIP_NAME" package
+          sha256sum "dist/$ZIP_NAME" > "dist/$ZIP_NAME.sha256"
+
+          echo "Final package created: dist/$ZIP_NAME"
+
+      - name: بارگذاری بسته نهایی
         uses: actions/upload-artifact@v4
         with:
-          name: Modiriat-Zendegi-SOURCE-28-FIXED-debug-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          name: Modiriat-Zendegi-v1.0.0-FULL-PACKAGE
+          path: dist/Modiriat-Zendegi-v1.0.0-FULL-PACKAGE.zip
           if-no-files-found: error
-          retention-days: 14
-          
+          retention-days: 90
+
+      - name: خلاصه اجرای ساخت
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## نتیجه ساخت مدیریت زندگی ۱.۰.۰"
+            echo ""
+            echo "- Source: MZ_SOURCE-28_v1.0.0.zip"
+            echo "- Expected package ID: ir.kambiz.daftar"
+            echo "- Expected versionName: 1.0.0"
+            echo "- Expected versionCode: 82"
+            echo "- Branch: ${GITHUB_REF_NAME}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Run ID: ${GITHUB_RUN_ID}"
+            if [ -f dist/Modiriat-Zendegi-v1.0.0-FULL-PACKAGE.zip.sha256 ]; then
+              echo "- Final ZIP SHA-256: $(cut -d' ' -f1 dist/Modiriat-Zendegi-v1.0.0-FULL-PACKAGE.zip.sha256)"
+            fi
+            echo ""
+            echo "بسته نهایی شامل ۱۱ پوشه است."
+            echo "آزمون نصب روی گوشی و آزمون عملکردی در این Workflow اجرا نمی‌شود."
+          } >> "$GITHUB_STEP_SUMMARY"
