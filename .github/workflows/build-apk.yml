@@ -14,49 +14,46 @@ permissions:
   contents: read
 
 concurrency:
-  group: mz-source-v1-2-build-${{ github.ref }}
+  group: mz-source-v1-2-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-and-package:
+  build:
+    name: Build and Package Test APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
-      - name: دریافت فایل‌های مخزن
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: نصب جاوا 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: نصب ابزارهای Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools
 
-      - name: نصب بسته‌های Android SDK
+      - name: Install Android SDK packages
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           yes | sdkmanager --licenses >/dev/null
 
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
-            "platforms;android-36" \
-            "build-tools;35.0.0" \
-            "build-tools;36.0.0"
+            "build-tools;35.0.0"
 
-      - name: نصب Gradle
+      - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
-      - name: آماده‌سازی ساختار بسته نهایی
+      - name: Prepare package directories
         shell: bash
         run: |
           set -euo pipefail
@@ -73,9 +70,10 @@ jobs:
             package/09_HASHES \
             package/10_REBUILD_GUIDE \
             package/11_OPTIONAL_ARTIFACTS \
-            source dist
+            source \
+            dist
 
-      - name: بررسی و استخراج سورس v1.2
+      - name: Validate and extract source archive
         shell: bash
         run: |
           set -euo pipefail
@@ -89,25 +87,37 @@ jobs:
 
           unzip -q "$SOURCE_ZIP" -d source
 
-          SETTINGS_FILE=$(find source -maxdepth 8 -type f \
-            \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -print -quit)
+          mapfile -t SETTINGS_FILES < <(
+            find source -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -print
+          )
 
-          test -n "$SETTINGS_FILE"
+          if [ "${#SETTINGS_FILES[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one Android project settings file."
+            printf '%s\n' "${SETTINGS_FILES[@]}"
+            exit 1
+          fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          PROJECT_DIR="$(dirname "${SETTINGS_FILES[0]}")"
 
-          test -f "$PROJECT_DIR/app/build.gradle" \
-            || test -f "$PROJECT_DIR/app/build.gradle.kts"
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "ERROR: app module Gradle file not found."
+            exit 1
+          fi
 
-          test -f "$PROJECT_DIR/gradle.properties"
+          if [ ! -f "$PROJECT_DIR/gradle.properties" ]; then
+            echo "ERROR: gradle.properties not found."
+            exit 1
+          fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "SOURCE_ZIP=$SOURCE_ZIP" >> "$GITHUB_ENV"
 
           cp -a "$PROJECT_DIR/." package/03_EXTRACTED_SOURCE/
 
-      - name: بررسی و ثبت مشخصات واقعی سورس
+      - name: Record source configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -115,30 +125,27 @@ jobs:
           {
             echo "SOURCE ARCHIVE: $SOURCE_ZIP"
             echo "PROJECT DIRECTORY: $PROJECT_DIR"
-            echo ""
-            echo "===== SOURCE_VERSION.txt ====="
+            echo
 
-            if [ -f "$PROJECT_DIR/SOURCE_VERSION.txt" ]; then
-              cat "$PROJECT_DIR/SOURCE_VERSION.txt"
-            else
-              echo "Not found"
-            fi
+            for FILE in \
+              SOURCE_VERSION.txt \
+              RELEASE_VERSION.txt \
+              gradle.properties \
+              README_GITHUB_BUILD_FA.txt \
+              README_SOURCE_29_TEST_FA.txt
+            do
+              echo "===== $FILE ====="
 
-            echo ""
-            echo "===== RELEASE_VERSION.txt ====="
+              if [ -f "$PROJECT_DIR/$FILE" ]; then
+                cat "$PROJECT_DIR/$FILE"
+              else
+                echo "Not found"
+              fi
 
-            if [ -f "$PROJECT_DIR/RELEASE_VERSION.txt" ]; then
-              cat "$PROJECT_DIR/RELEASE_VERSION.txt"
-            else
-              echo "Not found"
-            fi
+              echo
+            done
 
-            echo ""
-            echo "===== gradle.properties ====="
-            cat "$PROJECT_DIR/gradle.properties"
-
-            echo ""
-            echo "===== app/build.gradle.kts or build.gradle ====="
+            echo "===== APP GRADLE CONFIGURATION ====="
 
             if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
               cat "$PROJECT_DIR/app/build.gradle.kts"
@@ -146,18 +153,9 @@ jobs:
               cat "$PROJECT_DIR/app/build.gradle"
             fi
 
-            echo ""
-            echo "===== Internal build workflow ====="
+          } > package/08_BUILD_METADATA/source-configuration.txt
 
-            if [ -f "$PROJECT_DIR/.github/workflows/build-apk.yml" ]; then
-              cat "$PROJECT_DIR/.github/workflows/build-apk.yml"
-            else
-              echo "Not found"
-            fi
-
-          } | tee package/08_BUILD_METADATA/source-configuration.txt
-
-      - name: تعیین Android SDK موردنیاز
+      - name: Check Android SDK configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -168,61 +166,24 @@ jobs:
             APP_GRADLE="$PROJECT_DIR/app/build.gradle"
           fi
 
-          SDK_API=$(python3 - "$APP_GRADLE" <<'PY'
-          import pathlib, re, sys
-
-          content = pathlib.Path(sys.argv[1]).read_text(errors="ignore")
-
-          patterns = [
-              r'\bcompileSdk\s*(?:=\s*)?(\d+)',
-              r'\bcompileSdkVersion\s*(?:\(\s*)?(\d+)'
-          ]
-
-          for pattern in patterns:
-              match = re.search(pattern, content)
-              if match:
-                  print(match.group(1))
-                  break
-          else:
-              print("36")
-          PY
-          )
-
-          echo "Detected compile SDK: $SDK_API"
-
-          sdkmanager "platforms;android-$SDK_API"
-
-          echo "COMPILE_SDK=$SDK_API" >> "$GITHUB_ENV"
-
-      - name: ثبت محیط ساخت
-        shell: bash
-        run: |
-          set -euo pipefail
+          if ! grep -Eq \
+            'compileSdk(Version)?[[:space:]]*(=|\\()?35' \
+            "$APP_GRADLE"; then
+            echo "WARNING: compileSdk 35 was not confirmed by a simple source check."
+            echo "Gradle build will determine actual compatibility."
+          fi
 
           {
-            echo "Build timestamp UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-            echo "Runner: $RUNNER_OS"
-            echo "Architecture: $(uname -m)"
-            echo "Java:"
-            java -version 2>&1
-            echo ""
-            echo "Gradle:"
-            gradle --version
-            echo ""
-            echo "Android SDK API: $COMPILE_SDK"
-            echo "Repository: $GITHUB_REPOSITORY"
-            echo "Branch: $GITHUB_REF_NAME"
-            echo "Commit: $GITHUB_SHA"
-            echo "Workflow run: $GITHUB_RUN_ID"
-            echo "Source archive: $SOURCE_ZIP"
-            echo "Project directory: $PROJECT_DIR"
+            echo "Installed Android platform: android-35"
+            echo "Installed build tools: 35.0.0"
+            echo "Java version: 17"
+            echo "Gradle version: 8.7"
           } > package/04_BUILD_ENVIRONMENT/build-environment.txt
 
-      - name: ساخت APK آزمایشی
+      - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
-          set -o pipefail
 
           gradle \
             --no-daemon \
@@ -231,63 +192,83 @@ jobs:
             assembleDebug 2>&1 \
             | tee package/05_BUILD_LOGS/gradle-build.log
 
-      - name: استخراج مشخصات واقعی APK
+      - name: Locate and validate APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK=$(find "$PROJECT_DIR/app/build/outputs/apk" \
-            -type f -name '*.apk' \
-            | sort \
-            | head -n 1)
+          APK_DIR="$PROJECT_DIR/app/build/outputs/apk"
 
-          test -n "$APK"
+          if [ ! -d "$APK_DIR" ]; then
+            echo "ERROR: APK output directory not found."
+            exit 1
+          fi
+
+          mapfile -t APK_FILES < <(
+            find "$APK_DIR" -type f -name '*.apk' -print | sort
+          )
+
+          if [ "${#APK_FILES[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one APK."
+            echo "Found: ${#APK_FILES[@]}"
+            printf '%s\n' "${APK_FILES[@]}"
+            exit 1
+          fi
+
+          APK="${APK_FILES[0]}"
+
           test -s "$APK"
 
-          AAPT=$(find "$ANDROID_HOME/build-tools" \
-            -type f -name aapt \
-            | sort -V \
-            | tail -n 1)
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
 
-          test -x "$AAPT"
+          if [ ! -x "$AAPT" ]; then
+            echo "ERROR: aapt not found."
+            exit 1
+          fi
 
-          BADGING=$("$AAPT" dump badging "$APK")
+          BADGING="$("$AAPT" dump badging "$APK")"
 
           printf '%s\n' "$BADGING" \
             > package/08_BUILD_METADATA/apk-badging.txt
 
-          IDENTITY=$(printf '%s\n' "$BADGING" | \
+          IDENTITY="$(printf '%s\n' "$BADGING" | \
             sed -n "s/^package: name='\([^']*\)' versionCode='\([^']*\)' versionName='\([^']*\)'.*/\1|\2|\3/p" \
-            | head -n 1)
+            | head -n 1)"
 
-          test -n "$IDENTITY"
+          if [ -z "$IDENTITY" ]; then
+            echo "ERROR: Could not read APK identity."
+            exit 1
+          fi
 
-          APP_ID=$(echo "$IDENTITY" | cut -d'|' -f1)
-          VERSION_CODE=$(echo "$IDENTITY" | cut -d'|' -f2)
-          VERSION_NAME=$(echo "$IDENTITY" | cut -d'|' -f3)
+          APP_ID="$(echo "$IDENTITY" | cut -d'|' -f1)"
+          VERSION_CODE="$(echo "$IDENTITY" | cut -d'|' -f2)"
+          VERSION_NAME="$(echo "$IDENTITY" | cut -d'|' -f3)"
 
-          VERSION_SAFE=$(printf '%s' "$VERSION_NAME" \
-            | tr -c 'A-Za-z0-9._-' '_')
+          VERSION_SAFE="$(printf '%s' "$VERSION_NAME" | \
+            tr -c 'A-Za-z0-9._-' '_')"
+
+          APK_FILE="$(basename "$APK")"
 
           cp "$APK" package/01_APK/
 
-          echo "APP_ID=$APP_ID" >> "$GITHUB_ENV"
-          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
-          echo "VERSION_SAFE=$VERSION_SAFE" >> "$GITHUB_ENV"
-          echo "APK_FILE=$(basename "$APK")" >> "$GITHUB_ENV"
-
           {
             echo "Build result: SUCCESS"
-            echo "APK identity validation: PASSED"
             echo "Application ID: $APP_ID"
             echo "Version name: $VERSION_NAME"
             echo "Version code: $VERSION_CODE"
-            echo "APK filename: $(basename "$APK")"
-            echo "APK source path: $APK"
+            echo "APK filename: $APK_FILE"
+            echo "APK source: $APK"
           } > package/08_BUILD_METADATA/build-report.txt
 
-      - name: ثبت گزارش آزمون‌ها
+          {
+            echo "APP_ID=$APP_ID"
+            echo "VERSION_CODE=$VERSION_CODE"
+            echo "VERSION_NAME=$VERSION_NAME"
+            echo "VERSION_SAFE=$VERSION_SAFE"
+            echo "APK_FILE=$APK_FILE"
+          } >> "$GITHUB_ENV"
+
+      - name: Record test status
         shell: bash
         run: |
           set -euo pipefail
@@ -303,40 +284,30 @@ jobs:
           Version name: $VERSION_NAME
           Version code: $VERSION_CODE
 
-          Automated unit tests: NOT RUN
+          Unit tests: NOT RUN
           Instrumentation tests: NOT RUN
-          Physical device installation test: NOT RUN
-          Runtime functional test: NOT RUN
+          Physical device installation: NOT RUN
+          Runtime functional tests: NOT RUN
 
           Build type: DEBUG
           Release signing: NOT PERFORMED
           EOF
 
-      - name: ثبت تغییرات و سوابق پروژه
+      - name: Copy changelog
         shell: bash
         run: |
           set -euo pipefail
 
           if [ -f "$PROJECT_DIR/CHANGELOG.md" ]; then
-            cp "$PROJECT_DIR/CHANGELOG.md" \
-              package/07_CHANGELOG/
+            cp "$PROJECT_DIR/CHANGELOG.md" package/07_CHANGELOG/
           elif [ -f "$PROJECT_DIR/CHANGELOG_FA.txt" ]; then
-            cp "$PROJECT_DIR/CHANGELOG_FA.txt" \
-              package/07_CHANGELOG/
+            cp "$PROJECT_DIR/CHANGELOG_FA.txt" package/07_CHANGELOG/
           else
-            echo "No changelog file found." \
+            echo "No changelog found." \
               > package/07_CHANGELOG/CHANGELOG_STATUS.txt
           fi
 
-          {
-            echo "Source archive: $SOURCE_ZIP"
-            echo "Application ID: $APP_ID"
-            echo "Version name: $VERSION_NAME"
-            echo "Version code: $VERSION_CODE"
-            echo "Build type: DEBUG"
-          } > package/07_CHANGELOG/build-version-status.txt
-
-      - name: تهیه راهنمای بازسازی
+      - name: Create rebuild guide
         shell: bash
         run: |
           set -euo pipefail
@@ -346,62 +317,58 @@ jobs:
 
           Source archive: $SOURCE_ZIP
 
-          1. Extract the source archive.
-          2. Locate settings.gradle or settings.gradle.kts.
-          3. Use JDK 17.
-          4. Use Gradle 8.7.
-          5. Install Android SDK API $COMPILE_SDK.
-          6. Install Android build-tools 36.0.0.
-          7. Open the extracted Android project.
-          8. Run:
+          Java: 17
+          Gradle: 8.7
+          Android SDK: 35
+          Build tools: 35.0.0
 
-             gradle --no-daemon assembleDebug
+          Extract the source archive.
+          Open the Android project directory.
+          Run:
 
-          9. Expected APK output:
+          gradle --no-daemon assembleDebug
 
-             app/build/outputs/apk/
+          Build type: DEBUG
+          Release signing: NOT PERFORMED
 
-          10. Build type: DEBUG.
-          11. Device installation and runtime tests must be performed separately.
-          12. This package is not a release-signed APK.
-
-          Actual APK identity:
           Application ID: $APP_ID
           Version name: $VERSION_NAME
           Version code: $VERSION_CODE
+
+          Device installation and runtime tests must be performed separately.
           EOF
 
-      - name: ثبت وضعیت فایل‌های اختیاری
+      - name: Record optional artifacts
         shell: bash
         run: |
           set -euo pipefail
 
           cat > package/11_OPTIONAL_ARTIFACTS/CONTENTS_STATUS.txt <<'EOF'
-          No optional screenshots or device diagnostics were generated.
-          No private signing keys, passwords, or access tokens are included.
+          No device screenshots were generated.
+          No runtime diagnostics were generated.
+          No private signing keys or passwords are included.
           EOF
 
-      - name: ثبت فراداده نهایی ساخت
+      - name: Record build metadata
         shell: bash
         run: |
           set -euo pipefail
 
-          cat > package/08_BUILD_METADATA/release-metadata.txt <<EOF
-          Source archive: $SOURCE_ZIP
-          Application ID: $APP_ID
-          Version name: $VERSION_NAME
-          Version code: $VERSION_CODE
-          APK filename: $APK_FILE
-          Build type: DEBUG
-          Repository: $GITHUB_REPOSITORY
-          Branch: $GITHUB_REF_NAME
-          Commit: $GITHUB_SHA
-          Workflow run ID: $GITHUB_RUN_ID
-          Workflow run number: $GITHUB_RUN_NUMBER
-          Build timestamp UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
-          EOF
+          {
+            echo "Source archive: $SOURCE_ZIP"
+            echo "Application ID: $APP_ID"
+            echo "Version name: $VERSION_NAME"
+            echo "Version code: $VERSION_CODE"
+            echo "APK filename: $APK_FILE"
+            echo "Build type: DEBUG"
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Branch: $GITHUB_REF_NAME"
+            echo "Commit: $GITHUB_SHA"
+            echo "Run ID: $GITHUB_RUN_ID"
+            echo "Timestamp UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > package/08_BUILD_METADATA/release-metadata.txt
 
-      - name: تهیه هش SHA256 فایل‌ها
+      - name: Generate SHA256 checksums
         shell: bash
         run: |
           set -euo pipefail
@@ -416,7 +383,7 @@ jobs:
               | xargs -0 sha256sum
           ) > package/09_HASHES/SHA256SUMS.txt
 
-      - name: ساخت بسته نهایی یکپارچه
+      - name: Create final package
         shell: bash
         run: |
           set -euo pipefail
@@ -430,9 +397,7 @@ jobs:
 
           echo "PACKAGE_ZIP=$ZIP_NAME" >> "$GITHUB_ENV"
 
-          echo "Final package created: $ZIP_NAME"
-
-      - name: بارگذاری بسته نهایی
+      - name: Upload final package
         uses: actions/upload-artifact@v4
         with:
           name: Modiriat-Zendegi-MZ_SOURCE-v1.2-FULL-PACKAGE
@@ -440,13 +405,13 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: خلاصه اجرای ساخت
+      - name: Publish workflow summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## نتیجه ساخت مدیریت زندگی"
-            echo ""
+            echo "## Modiriat Zendegi - Build Summary"
+            echo
             echo "- Source: MZ_SOURCE_v1.2.zip"
             echo "- Branch: $GITHUB_REF_NAME"
             echo "- Commit: $GITHUB_SHA"
@@ -454,17 +419,14 @@ jobs:
 
             if [ -n "${APP_ID:-}" ]; then
               echo "- Application ID: $APP_ID"
-              echo "- Version name: $VERSION_NAME"
+              echo "- Version: $VERSION_NAME"
               echo "- Version code: $VERSION_CODE"
             fi
 
-            if [ -n "${PACKAGE_ZIP:-}" ] \
-              && [ -f "dist/$PACKAGE_ZIP.sha256" ]; then
-              echo "- Final package: $PACKAGE_ZIP"
-              echo "- SHA256: $(cut -d' ' -f1 "dist/$PACKAGE_ZIP.sha256")"
+            if [ -n "${PACKAGE_ZIP:-}" ]; then
+              echo "- Package: $PACKAGE_ZIP"
             fi
 
-            echo ""
-            echo "The final package contains 11 directories."
-            echo "Physical device and runtime tests are not performed by this workflow."
+            echo
+            echo "Device installation and runtime tests were not performed."
           } >> "$GITHUB_STEP_SUMMARY"
