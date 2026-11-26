@@ -70,7 +70,7 @@ jobs:
 
           echo "Source archive SHA256 verified."
 
-      - name: Extract source archive
+      - name: Extract source and identify Android project root
         shell: bash
         run: |
           set -euo pipefail
@@ -81,17 +81,37 @@ jobs:
           echo "Extracted source files:"
           find source -maxdepth 3 -type f | sort | head -200
 
-          GRADLE_FILE="$(find source -name gradlew -type f -print -quit)"
+          mapfile -t SETTINGS_FILES < <(
+            find source -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -print | sort
+          )
 
-          if [[ -z "${GRADLE_FILE}" ]]; then
-            echo "::error::gradlew was not found in the source archive"
+          if [[ "${#SETTINGS_FILES[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one settings.gradle(.kts); found ${#SETTINGS_FILES[@]}"
+            printf '%s\n' "${SETTINGS_FILES[@]}"
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "${GRADLE_FILE}")"
-          echo "PROJECT_DIR=${PROJECT_DIR}" >> "${GITHUB_ENV}"
+          PROJECT_DIR="$(dirname "${SETTINGS_FILES[0]}")"
 
-          chmod +x "${GRADLE_FILE}"
+          if [[ ! -f "${PROJECT_DIR}/app/build.gradle" && \
+                ! -f "${PROJECT_DIR}/app/build.gradle.kts" ]]; then
+            echo "::error::App module build.gradle(.kts) was not found"
+            exit 1
+          fi
+
+          if [[ ! -f "${PROJECT_DIR}/build.gradle" && \
+                ! -f "${PROJECT_DIR}/build.gradle.kts" ]]; then
+            echo "::error::Root build.gradle(.kts) was not found"
+            exit 1
+          fi
+
+          test -f "${PROJECT_DIR}/gradle.properties"
+          test -f "${PROJECT_DIR}/BUILD_GUIDE.md"
+
+          echo "PROJECT_DIR=${PROJECT_DIR}" >> "${GITHUB_ENV}"
+          echo "Resolved Android project: ${PROJECT_DIR}"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -105,7 +125,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          ./gradlew --no-daemon --stacktrace clean assembleDebug
+          gradle --version
+          gradle --no-daemon --stacktrace clean assembleDebug
 
       - name: Locate and verify APK
         working-directory: ${{ env.PROJECT_DIR }}
