@@ -1,44 +1,39 @@
 
-name: Build Android APK - MZ_SOURCE v1.4
+name: Build Android APK v1.4
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - build-new-apk
     paths:
-      - "MZ_SOURCE_v1.4.zip"
-      - ".github/workflows/build-apk.yml"
+      - '.github/workflows/build-apk.yml'
+      - 'MZ_SOURCE_v1.4.zip'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: mz-source-v1-4-${{ github.ref }}
+  group: build-apk-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build and Package Test APK
+    name: Build and verify APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    env:
-      SOURCE_ZIP: MZ_SOURCE_v1.4.zip
-      EXPECTED_SOURCE_SHA256: 125077b7fe2ab263437ae47406dd2c4f4758ff6cd410a187148eadddadb0679b
-      EXPECTED_APP_ID: ir.modiriyatzendegi.test
-      EXPECTED_VERSION_NAME: 1.0.0
-      EXPECTED_VERSION_CODE: 82
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: build-new-apk
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
@@ -48,8 +43,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          yes | sdkmanager --licenses >/dev/null
-
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -57,414 +50,186 @@ jobs:
             "build-tools;35.0.0" \
             "build-tools;36.0.0"
 
-      - name: Set up Gradle 8.7
+      - name: Verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f MZ_SOURCE_v1.4.zip
+
+          EXPECTED_SHA256="125077b7fe2ab263437ae47406dd2c4f4758ff6cd410a187148eadddadb0679b"
+          ACTUAL_SHA256="$(sha256sum MZ_SOURCE_v1.4.zip | awk '{print $1}')"
+
+          echo "Expected SHA256: ${EXPECTED_SHA256}"
+          echo "Actual SHA256:   ${ACTUAL_SHA256}"
+
+          if [[ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]]; then
+            echo "::error::Source archive SHA256 mismatch"
+            exit 1
+          fi
+
+          echo "Source archive SHA256 verified."
+
+      - name: Extract source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p source
+          unzip -q MZ_SOURCE_v1.4.zip -d source
+
+          echo "Extracted source files:"
+          find source -maxdepth 3 -type f | sort | head -200
+
+          GRADLE_FILE="$(find source -name gradlew -type f -print -quit)"
+
+          if [[ -z "${GRADLE_FILE}" ]]; then
+            echo "::error::gradlew was not found in the source archive"
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "${GRADLE_FILE}")"
+          echo "PROJECT_DIR=${PROJECT_DIR}" >> "${GITHUB_ENV}"
+
+          chmod +x "${GRADLE_FILE}"
+
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.7"
+          gradle-version: '8.7'
+          cache-disabled: false
 
-      - name: Prepare package directories
+      - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p \
-            package/01_APK \
-            package/02_SOURCE_ARCHIVE \
-            package/03_EXTRACTED_SOURCE \
-            package/04_BUILD_ENVIRONMENT \
-            package/05_BUILD_LOGS \
-            package/06_TEST_REPORTS \
-            package/07_CHANGELOG \
-            package/08_BUILD_METADATA \
-            package/09_HASHES \
-            package/10_REBUILD_GUIDE \
-            package/11_OPTIONAL_ARTIFACTS \
-            source \
-            dist
+          ./gradlew --no-daemon --stacktrace clean assembleDebug
 
-      - name: Validate source archive and SHA256
+      - name: Locate and verify APK
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
+        env:
+          EXPECTED_APP_ID: ir.modiriyatzendegi.test
+          EXPECTED_VERSION_NAME: 1.0.0
+          EXPECTED_VERSION_CODE: '82'
         run: |
           set -euo pipefail
 
-          test -s "$SOURCE_ZIP"
+          mapfile -t APK_FILES < <(find . -type f -path '*/build/outputs/apk/debug/*.apk' | sort)
 
-          ACTUAL_SOURCE_SHA256="$(sha256sum "$SOURCE_ZIP" | awk '{print $1}')"
-
-          echo "Expected SHA256: $EXPECTED_SOURCE_SHA256"
-          echo "Actual SHA256:   $ACTUAL_SOURCE_SHA256"
-
-          if [ "$ACTUAL_SOURCE_SHA256" != "$EXPECTED_SOURCE_SHA256" ]; then
-            echo "ERROR: Source archive SHA256 mismatch."
-            exit 1
-          fi
-
-          unzip -tq "$SOURCE_ZIP"
-
-          cp "$SOURCE_ZIP" package/02_SOURCE_ARCHIVE/
-
-          echo "SOURCE_SHA256=$ACTUAL_SOURCE_SHA256" >> "$GITHUB_ENV"
-
-      - name: Extract and inspect source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          unzip -q "$SOURCE_ZIP" -d source
-
-          mapfile -t SETTINGS_FILES < <(
-            find source -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -print
-          )
-
-          if [ "${#SETTINGS_FILES[@]}" -ne 1 ]; then
-            echo "ERROR: Expected exactly one Android project settings file."
-            printf '%s\n' "${SETTINGS_FILES[@]}"
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "${SETTINGS_FILES[0]}")"
-
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: App module Gradle file not found."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/gradle.properties" ]; then
-            echo "ERROR: gradle.properties not found."
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          cp -a "$PROJECT_DIR/." package/03_EXTRACTED_SOURCE/
-
-      - name: Record source configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          {
-            echo "SOURCE ARCHIVE: $SOURCE_ZIP"
-            echo "SOURCE SHA256: $SOURCE_SHA256"
-            echo "PROJECT DIRECTORY: $PROJECT_DIR"
-            echo
-
-            for FILE in \
-              SOURCE_VERSION.txt \
-              RELEASE_VERSION.txt \
-              gradle.properties \
-              README_GITHUB_BUILD_FA.txt \
-              README_SOURCE_29_TEST_FA.txt
-            do
-              echo "===== $FILE ====="
-
-              if [ -f "$PROJECT_DIR/$FILE" ]; then
-                cat "$PROJECT_DIR/$FILE"
-              else
-                echo "Not found"
-              fi
-
-              echo
-            done
-
-            echo "===== APP GRADLE CONFIGURATION ====="
-
-            if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-              cat "$PROJECT_DIR/app/build.gradle.kts"
-            else
-              cat "$PROJECT_DIR/app/build.gradle"
-            fi
-
-          } > package/08_BUILD_METADATA/source-configuration.txt
-
-      - name: Record build environment
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          {
-            echo "Installed Android platforms: android-35, android-36"
-            echo "Installed build tools: 35.0.0, 36.0.0"
-            echo "Java version: 17"
-            echo "Gradle version: 8.7"
-            echo "Build type: DEBUG"
-          } > package/04_BUILD_ENVIRONMENT/build-environment.txt
-
-      - name: Build debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          gradle \
-            --no-daemon \
-            --stacktrace \
-            -p "$PROJECT_DIR" \
-            assembleDebug 2>&1 \
-            | tee package/05_BUILD_LOGS/gradle-build.log
-
-      - name: Locate and validate APK identity
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK_DIR="$PROJECT_DIR/app/build/outputs/apk"
-
-          if [ ! -d "$APK_DIR" ]; then
-            echo "ERROR: APK output directory not found."
-            exit 1
-          fi
-
-          mapfile -t APK_FILES < <(
-            find "$APK_DIR" -type f -name '*.apk' -print | sort
-          )
-
-          if [ "${#APK_FILES[@]}" -ne 1 ]; then
-            echo "ERROR: Expected exactly one APK."
-            echo "Found: ${#APK_FILES[@]}"
+          if [[ "${#APK_FILES[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one Debug APK; found ${#APK_FILES[@]}"
             printf '%s\n' "${APK_FILES[@]}"
             exit 1
           fi
 
-          APK="${APK_FILES[0]}"
-          test -s "$APK"
+          APK_PATH="${APK_FILES[0]}"
+          AAPT="${ANDROID_HOME}/build-tools/35.0.0/aapt"
 
-          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
-
-          if [ ! -x "$AAPT" ]; then
-            echo "ERROR: aapt not found."
+          if [[ ! -x "${AAPT}" ]]; then
+            echo "::error::aapt was not found"
             exit 1
           fi
 
-          BADGING="$("$AAPT" dump badging "$APK")"
+          BADGING="$("${AAPT}" dump badging "${APK_PATH}")"
 
-          printf '%s\n' "$BADGING" \
-            > package/08_BUILD_METADATA/apk-badging.txt
+          echo "${BADGING}"
 
-          IDENTITY="$(printf '%s\n' "$BADGING" |
-            sed -n "s/^package: name='\([^']*\)' versionCode='\([^']*\)' versionName='\([^']*\)'.*/\1|\2|\3/p" |
-            head -n 1)"
+          APP_ID="$(printf '%s\n' "${BADGING}" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
+          VERSION_CODE="$(printf '%s\n' "${BADGING}" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p")"
+          VERSION_NAME="$(printf '%s\n' "${BADGING}" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")"
 
-          if [ -z "$IDENTITY" ]; then
-            echo "ERROR: Could not read APK identity."
+          echo "Detected application ID: ${APP_ID}"
+          echo "Detected version name: ${VERSION_NAME}"
+          echo "Detected version code: ${VERSION_CODE}"
+
+          [[ "${APP_ID}" == "${EXPECTED_APP_ID}" ]] || {
+            echo "::error::Application ID mismatch"
             exit 1
-          fi
+          }
 
-          APP_ID="$(echo "$IDENTITY" | cut -d'|' -f1)"
-          VERSION_CODE="$(echo "$IDENTITY" | cut -d'|' -f2)"
-          VERSION_NAME="$(echo "$IDENTITY" | cut -d'|' -f3)"
-
-          if [ "$APP_ID" != "$EXPECTED_APP_ID" ]; then
-            echo "ERROR: Application ID mismatch."
-            echo "Expected: $EXPECTED_APP_ID"
-            echo "Actual:   $APP_ID"
+          [[ "${VERSION_NAME}" == "${EXPECTED_VERSION_NAME}" ]] || {
+            echo "::error::Version name mismatch"
             exit 1
-          fi
+          }
 
-          if [ "$VERSION_NAME" != "$EXPECTED_VERSION_NAME" ]; then
-            echo "ERROR: Version name mismatch."
+          [[ "${VERSION_CODE}" == "${EXPECTED_VERSION_CODE}" ]] || {
+            echo "::error::Version code mismatch"
             exit 1
-          fi
+          }
 
-          if [ "$VERSION_CODE" != "$EXPECTED_VERSION_CODE" ]; then
-            echo "ERROR: Version code mismatch."
-            exit 1
-          fi
+          mkdir -p "${GITHUB_WORKSPACE}/apk-output"
+          cp "${APK_PATH}" "${GITHUB_WORKSPACE}/apk-output/Modiriat-Zendegi-v1.0.0-debug.apk"
 
-          VERSION_SAFE="$(printf '%s' "$VERSION_NAME" |
-            tr -c 'A-Za-z0-9._-' '_')"
+          sha256sum "${GITHUB_WORKSPACE}/apk-output/Modiriat-Zendegi-v1.0.0-debug.apk"
 
-          APK_FILE="$(basename "$APK")"
+          echo "APK verification passed."
 
-          cp "$APK" package/01_APK/
-
-          {
-            echo "Build result: SUCCESS"
-            echo "Source archive: $SOURCE_ZIP"
-            echo "Source SHA256: $SOURCE_SHA256"
-            echo "Application ID: $APP_ID"
-            echo "Version name: $VERSION_NAME"
-            echo "Version code: $VERSION_CODE"
-            echo "APK filename: $APK_FILE"
-            echo "APK source: $APK"
-            echo "Identity validation: PASSED"
-          } > package/08_BUILD_METADATA/build-report.txt
-
-          {
-            echo "APP_ID=$APP_ID"
-            echo "VERSION_CODE=$VERSION_CODE"
-            echo "VERSION_NAME=$VERSION_NAME"
-            echo "VERSION_SAFE=$VERSION_SAFE"
-            echo "APK_FILE=$APK_FILE"
-          } >> "$GITHUB_ENV"
-
-      - name: Record test status
+      - name: Create APK package
         shell: bash
         run: |
           set -euo pipefail
 
-          cat > package/06_TEST_REPORTS/test-status.txt <<EOF
-          Source archive validation: PASSED
-          Source SHA256 validation: PASSED
-          Source extraction: PASSED
-          Gradle build: PASSED
-          APK generation: PASSED
-          APK metadata extraction: PASSED
-          APK identity validation: PASSED
+          cd apk-output
 
-          Source SHA256: $SOURCE_SHA256
-          Application ID: $APP_ID
-          Version name: $VERSION_NAME
-          Version code: $VERSION_CODE
+          sha256sum Modiriat-Zendegi-v1.0.0-debug.apk > SHA256SUMS.txt
 
-          Unit tests: NOT RUN
-          Instrumentation tests: NOT RUN
-          Physical device installation: NOT RUN
-          Runtime functional tests: NOT RUN
+          zip -q Modiriat-Zendegi-v1.0.0-debug-package.zip \
+            Modiriat-Zendegi-v1.0.0-debug.apk \
+            SHA256SUMS.txt
 
-          Build type: DEBUG
-          Release signing: NOT PERFORMED
+          cd "${GITHUB_WORKSPACE}"
+
+          mkdir -p build-report
+
+          cat > build-report/BUILD_REPORT.txt <<'EOF'
+          Project: Modiriat Zendegi 2.0
+          Source: MZ_SOURCE_v1.4.zip
+          Branch: build-new-apk
+          Build type: Debug
+          Application ID: ir.modiriyatzendegi.test
+          Version name: 1.0.0
+          Version code: 82
+
+          Build and APK identity verification are performed by this workflow.
+
+          Unit tests: NOT RUN unless separately configured and executed.
+          Instrumentation tests: NOT RUN.
+          Device tests: NOT RUN.
+          Runtime migration tests: NOT RUN.
+          Keystore and restore tests: NOT RUN.
+
+          A successful build does not establish device/runtime correctness.
           EOF
 
-      - name: Copy changelog
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -f "$PROJECT_DIR/CHANGELOG.md" ]; then
-            cp "$PROJECT_DIR/CHANGELOG.md" package/07_CHANGELOG/
-          elif [ -f "$PROJECT_DIR/CHANGELOG_FA.txt" ]; then
-            cp "$PROJECT_DIR/CHANGELOG_FA.txt" package/07_CHANGELOG/
-          else
-            echo "No changelog found." \
-              > package/07_CHANGELOG/CHANGELOG_STATUS.txt
-          fi
-
-      - name: Create rebuild guide
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > package/10_REBUILD_GUIDE/REBUILD_GUIDE.txt <<EOF
-          REBUILD GUIDE
-
-          Source archive: $SOURCE_ZIP
-          Source SHA256: $SOURCE_SHA256
-
-          Java: 17
-          Gradle: 8.7
-          Android SDK platforms: 35 and 36
-          Build tools: 35.0.0 and 36.0.0
-
-          Extract the source archive.
-          Open the Android project directory.
-          Run:
-
-          gradle --no-daemon assembleDebug
-
-          Build type: DEBUG
-          Release signing: NOT PERFORMED
-
-          Application ID: $APP_ID
-          Version name: $VERSION_NAME
-          Version code: $VERSION_CODE
-
-          Device installation and runtime tests must be performed separately.
-          EOF
-
-      - name: Record optional artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > package/11_OPTIONAL_ARTIFACTS/CONTENTS_STATUS.txt <<'EOF'
-          No device screenshots were generated.
-          No runtime diagnostics were generated.
-          No private signing keys or passwords are included.
-          EOF
-
-      - name: Record build metadata
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          {
-            echo "Source archive: $SOURCE_ZIP"
-            echo "Source SHA256: $SOURCE_SHA256"
-            echo "Application ID: $APP_ID"
-            echo "Version name: $VERSION_NAME"
-            echo "Version code: $VERSION_CODE"
-            echo "APK filename: $APK_FILE"
-            echo "Build type: DEBUG"
-            echo "Repository: $GITHUB_REPOSITORY"
-            echo "Branch: $GITHUB_REF_NAME"
-            echo "Commit: $GITHUB_SHA"
-            echo "Run ID: $GITHUB_RUN_ID"
-            echo "Timestamp UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          } > package/08_BUILD_METADATA/release-metadata.txt
-
-      - name: Generate SHA256 checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          (
-            cd package
-
-            find . -type f \
-              ! -path './09_HASHES/SHA256SUMS.txt' \
-              -print0 \
-              | sort -z \
-              | xargs -0 sha256sum
-          ) > package/09_HASHES/SHA256SUMS.txt
-
-      - name: Create final package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP_NAME="Modiriat-Zendegi-${VERSION_SAFE}-FULL-PACKAGE.zip"
-
-          zip -qr "dist/$ZIP_NAME" package
-
-          sha256sum "dist/$ZIP_NAME" \
-            > "dist/$ZIP_NAME.sha256"
-
-          echo "PACKAGE_ZIP=$ZIP_NAME" >> "$GITHUB_ENV"
-
-      - name: Upload final package
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Modiriat-Zendegi-MZ_SOURCE-v1.4-FULL-PACKAGE
-          path: dist/
+          name: Modiriat-Zendegi-v1.0.0-debug
+          path: |
+            apk-output/Modiriat-Zendegi-v1.0.0-debug.apk
+            apk-output/Modiriat-Zendegi-v1.0.0-debug-package.zip
+            apk-output/SHA256SUMS.txt
+            build-report/BUILD_REPORT.txt
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
 
-      - name: Publish workflow summary
+      - name: Build summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## Modiriat Zendegi - Build Summary"
-            echo
-            echo "- Source: MZ_SOURCE_v1.4.zip"
-            echo "- Expected source SHA256: $EXPECTED_SOURCE_SHA256"
-            echo "- Branch: $GITHUB_REF_NAME"
-            echo "- Commit: $GITHUB_SHA"
-            echo "- Run ID: $GITHUB_RUN_ID"
-
-            if [ -n "${APP_ID:-}" ]; then
-              echo "- Application ID: $APP_ID"
-              echo "- Version: $VERSION_NAME"
-              echo "- Version code: $VERSION_CODE"
-            fi
-
-            if [ -n "${PACKAGE_ZIP:-}" ]; then
-              echo "- Package: $PACKAGE_ZIP"
-            fi
-
-            echo
-            echo "Device installation and runtime tests were not performed."
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "## Android APK Build"
+            echo ""
+            echo "- Branch: \`${GITHUB_REF_NAME}\`"
+            echo "- Source: \`MZ_SOURCE_v1.4.zip\`"
+            echo "- Application ID: \`ir.modiriyatzendegi.test\`"
+            echo "- Version: \`1.0.0 (82)\`"
+            echo "- Unit tests: NOT RUN unless separately configured"
+            echo "- Instrumentation tests: NOT RUN"
+            echo "- Device/runtime tests: NOT RUN"
+            echo ""
+            echo "Build success does not prove device/runtime behavior."
+          } >> "${GITHUB_STEP_SUMMARY}"
