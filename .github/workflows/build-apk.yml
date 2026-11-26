@@ -53,7 +53,9 @@ jobs:
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
-            "build-tools;35.0.0"
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "build-tools;36.0.0"
 
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -178,24 +180,17 @@ jobs:
 
           } > package/08_BUILD_METADATA/source-configuration.txt
 
-      - name: Check Android SDK configuration
+      - name: Record build environment
         shell: bash
         run: |
           set -euo pipefail
 
-          APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
-
-          if [ ! -f "$APP_GRADLE" ]; then
-            APP_GRADLE="$PROJECT_DIR/app/build.gradle"
-          fi
-
           {
-            echo "Installed Android platform: android-35"
-            echo "Installed build tools: 35.0.0"
+            echo "Installed Android platforms: android-35, android-36"
+            echo "Installed build tools: 35.0.0, 36.0.0"
             echo "Java version: 17"
             echo "Gradle version: 8.7"
-            echo
-            echo "App Gradle file: $APP_GRADLE"
+            echo "Build type: DEBUG"
           } > package/04_BUILD_ENVIRONMENT/build-environment.txt
 
       - name: Build debug APK
@@ -360,8 +355,8 @@ jobs:
 
           Java: 17
           Gradle: 8.7
-          Android SDK: 35
-          Build tools: 35.0.0
+          Android SDK platforms: 35 and 36
+          Build tools: 35.0.0 and 36.0.0
 
           Extract the source archive.
           Open the Android project directory.
