@@ -28,17 +28,49 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+
+          test -d "$SDK_ROOT"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+
+          echo "Android SDK: $SDK_ROOT"
+          echo "SDK Manager: $SDKMANAGER"
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          set -euo pipefail
+
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Verify source archive
         shell: bash
         run: |
           set -euo pipefail
+
           test -f MZ_SOURCE_v1.5.zip
+          echo "Source archive found."
           sha256sum MZ_SOURCE_v1.5.zip
           unzip -t MZ_SOURCE_v1.5.zip
 
@@ -46,36 +78,63 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir source
+
+          mkdir -p source
           unzip -q MZ_SOURCE_v1.5.zip -d source
+
           echo "Extracted files:"
           find source -maxdepth 3 -type f | head -100
 
-          ROOT="$(find source -name settings.gradle -o -name settings.gradle.kts | head -1)"
-          test -n "$ROOT"
+          ROOT="$(find source \( -name settings.gradle -o -name settings.gradle.kts \) -type f | head -1)"
+
+          if [ -z "$ROOT" ]; then
+            echo "ERROR: Gradle settings file not found."
+            exit 1
+          fi
+
           PROJECT_ROOT="$(dirname "$ROOT")"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
           echo "Project root: $PROJECT_ROOT"
 
       - name: Verify and patch temporary build configuration
         shell: bash
         run: |
           set -euo pipefail
+
           python3 - <<'PY'
-          import os, pathlib, re
+          import os
+          import pathlib
+          import re
 
           root = pathlib.Path(os.environ["PROJECT_ROOT"])
-          gradle_files = list(root.rglob("build.gradle")) + list(root.rglob("build.gradle.kts"))
+
+          gradle_files = (
+              list(root.rglob("build.gradle")) +
+              list(root.rglob("build.gradle.kts"))
+          )
+
+          if not gradle_files:
+              raise SystemExit("ERROR: No Gradle build files found.")
 
           for path in gradle_files:
               text = path.read_text(encoding="utf-8")
               original = text
 
-              text = re.sub(r'compileSdk\s*=\s*35\b', 'compileSdk = 36', text)
-              text = re.sub(r'compileSdk\s+35\b', 'compileSdk 36', text)
+              text = re.sub(
+                  r'compileSdk\s*=\s*35\b',
+                  'compileSdk = 36',
+                  text
+              )
 
-              text = text.replace('8.6.1', '8.10.0')
-              text = text.replace('2.0.20', '2.2.10')
+              text = re.sub(
+                  r'compileSdk\s+35\b',
+                  'compileSdk 36',
+                  text
+              )
+
+              text = text.replace("8.6.1", "8.10.0")
+              text = text.replace("2.0.20", "2.2.10")
 
               if text != original:
                   path.write_text(text, encoding="utf-8")
@@ -91,24 +150,50 @@ jobs:
 
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_ROOT }}
-        run: gradle assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle assembleDebug --stacktrace
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find "$PROJECT_ROOT" -path '*/build/outputs/apk/debug/*.apk' -type f | head -1)"
-          test -n "$APK"
+
+          APK="$(find "$PROJECT_ROOT" \
+            -path '*/build/outputs/apk/debug/*.apk' \
+            -type f | head -1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Debug APK not found."
+            exit 1
+          fi
+
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
-          cp "$APK" "$GITHUB_WORKSPACE/apk-output/management-life-v1.5-debug.apk"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/apk-output/management-life-v1.5-debug.apk"
+
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
           ls -lh "$APK"
 
       - name: Verify APK package information
+        shell: bash
         run: |
           set -euo pipefail
+
           APK="$GITHUB_WORKSPACE/apk-output/management-life-v1.5-debug.apk"
-          aapt dump badging "$APK" | head -20
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
+
+          test -f "$AAPT"
+
+          BADGING="$("$AAPT" dump badging "$APK")"
+
+          echo "$BADGING" | head -20
+
+          echo "$BADGING" | grep -F \
+            "package: name='ir.modiriyatzendegi.test' versionCode='82' versionName='1.0.0'"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -120,6 +205,7 @@ jobs:
 
       - name: Build summary
         if: always()
+        shell: bash
         run: |
           echo "## Management Life 2.0 - v1.5" >> "$GITHUB_STEP_SUMMARY"
           echo "Source: MZ_SOURCE_v1.5.zip" >> "$GITHUB_STEP_SUMMARY"
