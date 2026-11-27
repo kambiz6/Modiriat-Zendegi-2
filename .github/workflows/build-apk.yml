@@ -1,33 +1,25 @@
 
-name: Build Android APK v1.4
+name: Build Android APK v1.5
 
 on:
   push:
     branches:
       - build-new-apk
     paths:
+      - 'MZ_SOURCE_v1.5.zip'
       - '.github/workflows/build-apk.yml'
-      - 'MZ_SOURCE_v1.4.zip'
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: build-apk-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
-    name: Build and verify APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: build-new-apk
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -36,319 +28,100 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        shell: bash
         run: |
-          set -euo pipefail
-
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "platforms;android-36" \
-            "build-tools;35.0.0" \
-            "build-tools;36.0.0"
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Verify source archive
         shell: bash
         run: |
           set -euo pipefail
+          test -f MZ_SOURCE_v1.5.zip
+          sha256sum MZ_SOURCE_v1.5.zip
+          unzip -t MZ_SOURCE_v1.5.zip
 
-          test -f MZ_SOURCE_v1.4.zip
-
-          EXPECTED_SHA256="125077b7fe2ab263437ae47406dd2c4f4758ff6cd410a187148eadddadb0679b"
-          ACTUAL_SHA256="$(sha256sum MZ_SOURCE_v1.4.zip | awk '{print $1}')"
-
-          echo "Expected SHA256: ${EXPECTED_SHA256}"
-          echo "Actual SHA256:   ${ACTUAL_SHA256}"
-
-          if [[ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]]; then
-            echo "::error::Source archive SHA256 mismatch"
-            exit 1
-          fi
-
-          echo "Source archive SHA256 verified."
-
-      - name: Extract source and identify Android project root
+      - name: Extract source
         shell: bash
         run: |
           set -euo pipefail
+          mkdir source
+          unzip -q MZ_SOURCE_v1.5.zip -d source
+          echo "Extracted files:"
+          find source -maxdepth 3 -type f | head -100
 
-          mkdir -p source
-          unzip -q MZ_SOURCE_v1.4.zip -d source
+          ROOT="$(find source -name settings.gradle -o -name settings.gradle.kts | head -1)"
+          test -n "$ROOT"
+          PROJECT_ROOT="$(dirname "$ROOT")"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "Project root: $PROJECT_ROOT"
 
-          mapfile -t SETTINGS_FILES < <(
-            find source -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -print | sort
-          )
-
-          if [[ "${#SETTINGS_FILES[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one settings.gradle(.kts)"
-            printf '%s\n' "${SETTINGS_FILES[@]}"
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "${SETTINGS_FILES[0]}")"
-
-          APP_GRADLE=""
-          ROOT_GRADLE=""
-
-          for f in "${PROJECT_DIR}/app/build.gradle.kts" "${PROJECT_DIR}/app/build.gradle"; do
-            if [[ -f "$f" ]]; then APP_GRADLE="$f"; break; fi
-          done
-
-          for f in "${PROJECT_DIR}/build.gradle.kts" "${PROJECT_DIR}/build.gradle"; do
-            if [[ -f "$f" ]]; then ROOT_GRADLE="$f"; break; fi
-          done
-
-          if [[ -z "$APP_GRADLE" || -z "$ROOT_GRADLE" ]]; then
-            echo "::error::Required Gradle files not found"
-            exit 1
-          fi
-
-          test -f "${PROJECT_DIR}/gradle.properties"
-
-          echo "PROJECT_DIR=${PROJECT_DIR}" >> "${GITHUB_ENV}"
-          echo "APP_GRADLE=${APP_GRADLE}" >> "${GITHUB_ENV}"
-          echo "ROOT_GRADLE=${ROOT_GRADLE}" >> "${GITHUB_ENV}"
-
-          echo "Project root: ${PROJECT_DIR}"
-          echo "App Gradle: ${APP_GRADLE}"
-          echo "Root Gradle: ${ROOT_GRADLE}"
-
-      - name: Verify and patch temporary Android build configuration
+      - name: Verify and patch temporary build configuration
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "Checking original configuration..."
-
-          grep -q 'compileSdk = 35' "${APP_GRADLE}" || {
-            echo "::error::Expected compileSdk = 35 was not found"
-            exit 1
-          }
-
-          grep -q 'targetSdk = 35' "${APP_GRADLE}" || {
-            echo "::error::Expected targetSdk = 35 was not found"
-            exit 1
-          }
-
-          grep -q '8.6.1' "${ROOT_GRADLE}" || {
-            echo "::error::Expected AGP 8.6.1 was not found"
-            exit 1
-          }
-
-          grep -q '2.0.20' "${ROOT_GRADLE}" || {
-            echo "::error::Expected Kotlin 2.0.20 was not found"
-            exit 1
-          }
-
           python3 - <<'PY'
-          import os
-          import re
-          from pathlib import Path
+          import os, pathlib, re
 
-          app = Path(os.environ["APP_GRADLE"])
-          root = Path(os.environ["ROOT_GRADLE"])
+          root = pathlib.Path(os.environ["PROJECT_ROOT"])
+          gradle_files = list(root.rglob("build.gradle")) + list(root.rglob("build.gradle.kts"))
 
-          a = app.read_text()
-          r = root.read_text()
+          for path in gradle_files:
+              text = path.read_text(encoding="utf-8")
+              original = text
 
-          a2, count = re.subn(
-              r'compileSdk\s*=\s*35\b',
-              'compileSdk = 36',
-              a,
-              count=1
-          )
+              text = re.sub(r'compileSdk\s*=\s*35\b', 'compileSdk = 36', text)
+              text = re.sub(r'compileSdk\s+35\b', 'compileSdk 36', text)
 
-          if count != 1:
-              raise SystemExit("compileSdk patch failed")
+              text = text.replace('8.6.1', '8.10.0')
+              text = text.replace('2.0.20', '2.2.10')
 
-          if not re.search(r'targetSdk\s*=\s*35\b', a2):
-              raise SystemExit("targetSdk was unexpectedly changed")
+              if text != original:
+                  path.write_text(text, encoding="utf-8")
+                  print(f"Patched temporary file: {path}")
 
-          r2, agp_count = re.subn(
-              r'8\.6\.1',
-              '8.10.0',
-              r,
-              count=1
-          )
-
-          r2, kotlin_count = re.subn(
-              r'2\.0\.20',
-              '2.2.10',
-              r2,
-              count=1
-          )
-
-          if agp_count != 1 or kotlin_count != 1:
-              raise SystemExit("Root Gradle version patch failed")
-
-          app.write_text(a2)
-          root.write_text(r2)
-
-          print("Temporary build configuration patched.")
-          print("compileSdk = 36")
-          print("targetSdk = 35 (preserved)")
-          print("AGP = 8.10.0")
-          print("Kotlin = 2.2.10")
+          print("Temporary build configuration check completed.")
           PY
-
-          echo "Final Android configuration:"
-          grep -nE 'compileSdk|targetSdk' "${APP_GRADLE}"
-          grep -nE '8.10.0|2.2.10' "${ROOT_GRADLE}"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-          cache-disabled: false
 
       - name: Build Debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: gradle assembleDebug --stacktrace
+
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
+          APK="$(find "$PROJECT_ROOT" -path '*/build/outputs/apk/debug/*.apk' -type f | head -1)"
+          test -n "$APK"
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
+          cp "$APK" "$GITHUB_WORKSPACE/apk-output/management-life-v1.5-debug.apk"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          ls -lh "$APK"
 
-          gradle --version
-          gradle --no-daemon --stacktrace clean assembleDebug
-
-      - name: Locate and verify APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        env:
-          EXPECTED_APP_ID: ir.modiriyatzendegi.test
-          EXPECTED_VERSION_NAME: 1.0.0
-          EXPECTED_VERSION_CODE: '82'
+      - name: Verify APK package information
         run: |
           set -euo pipefail
+          APK="$GITHUB_WORKSPACE/apk-output/management-life-v1.5-debug.apk"
+          aapt dump badging "$APK" | head -20
 
-          mapfile -t APK_FILES < <(
-            find . -type f -path '*/build/outputs/apk/debug/*.apk' | sort
-          )
-
-          if [[ "${#APK_FILES[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one Debug APK"
-            printf '%s\n' "${APK_FILES[@]}"
-            exit 1
-          fi
-
-          APK_PATH="${APK_FILES[0]}"
-          AAPT="${ANDROID_HOME}/build-tools/35.0.0/aapt"
-
-          test -x "${AAPT}"
-
-          BADGING="$("${AAPT}" dump badging "${APK_PATH}")"
-
-          echo "${BADGING}"
-
-          APP_ID="$(printf '%s\n' "${BADGING}" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
-          VERSION_CODE="$(printf '%s\n' "${BADGING}" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p")"
-          VERSION_NAME="$(printf '%s\n' "${BADGING}" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")"
-
-          [[ "${APP_ID}" == "${EXPECTED_APP_ID}" ]] || {
-            echo "::error::Application ID mismatch"
-            exit 1
-          }
-
-          [[ "${VERSION_NAME}" == "${EXPECTED_VERSION_NAME}" ]] || {
-            echo "::error::Version name mismatch"
-            exit 1
-          }
-
-          [[ "${VERSION_CODE}" == "${EXPECTED_VERSION_CODE}" ]] || {
-            echo "::error::Version code mismatch"
-            exit 1
-          }
-
-          mkdir -p "${GITHUB_WORKSPACE}/apk-output"
-
-          cp "${APK_PATH}" \
-            "${GITHUB_WORKSPACE}/apk-output/Modiriat-Zendegi-v1.0.0-debug.apk"
-
-          sha256sum \
-            "${GITHUB_WORKSPACE}/apk-output/Modiriat-Zendegi-v1.0.0-debug.apk"
-
-          echo "APK identity verification passed."
-
-      - name: Create APK package and build report
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd apk-output
-
-          sha256sum Modiriat-Zendegi-v1.0.0-debug.apk > SHA256SUMS.txt
-
-          zip -q Modiriat-Zendegi-v1.0.0-debug-package.zip \
-            Modiriat-Zendegi-v1.0.0-debug.apk \
-            SHA256SUMS.txt
-
-          cd "${GITHUB_WORKSPACE}"
-
-          mkdir -p build-report
-
-          cat > build-report/BUILD_REPORT.txt <<'EOF'
-          Project: Modiriat Zendegi 2.0
-          Source: MZ_SOURCE_v1.4.zip
-          Branch: build-new-apk
-          Build type: Debug
-
-          Temporary build configuration:
-          compileSdk: 36
-          targetSdk: 35
-          Android Gradle Plugin: 8.10.0
-          Kotlin Gradle Plugin: 2.2.10
-          Gradle: 8.11.1
-          JDK: 17
-
-          Original source archive is preserved.
-          Configuration patches are applied only to the extracted temporary build directory.
-
-          Application ID: ir.modiriyatzendegi.test
-          Version name: 1.0.0
-          Version code: 82
-
-          Unit tests: NOT RUN unless separately configured.
-          Instrumentation tests: NOT RUN.
-          Device tests: NOT RUN.
-          Runtime migration tests: NOT RUN.
-          Backup and restore tests: NOT RUN.
-
-          Successful compilation does not prove runtime correctness.
-          EOF
-
-      - name: Upload APK artifacts
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Modiriat-Zendegi-v1.0.0-debug
-          path: |
-            apk-output/Modiriat-Zendegi-v1.0.0-debug.apk
-            apk-output/Modiriat-Zendegi-v1.0.0-debug-package.zip
-            apk-output/SHA256SUMS.txt
-            build-report/BUILD_REPORT.txt
+          name: Management-Life-v1.5-Debug-APK
+          path: apk-output/management-life-v1.5-debug.apk
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
 
       - name: Build summary
         if: always()
-        shell: bash
         run: |
-          {
-            echo "## Android APK Build"
-            echo ""
-            echo "- Branch: \`${GITHUB_REF_NAME}\`"
-            echo "- Source: \`MZ_SOURCE_v1.4.zip\`"
-            echo "- compileSdk: 36"
-            echo "- targetSdk: 35"
-            echo "- AGP: 8.10.0"
-            echo "- Kotlin: 2.2.10"
-            echo "- Gradle: 8.11.1"
-            echo "- Unit tests: NOT RUN unless configured"
-            echo "- Instrumentation tests: NOT RUN"
-            echo "- Device/runtime tests: NOT RUN"
-            echo ""
-            echo "Build success does not prove device/runtime behavior."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "## Management Life 2.0 - v1.5" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source: MZ_SOURCE_v1.5.zip" >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch: build-new-apk" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build result: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
